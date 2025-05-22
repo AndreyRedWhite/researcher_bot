@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 from typing import Tuple
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.bot import DefaultBotProperties
 from aiogram.types import (
     Message, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton
@@ -13,24 +14,42 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
-from pydantic import BaseSettings, Field
-from aiograph import Telegraph
+# from pydantic import BaseSettings, Field
+from pydantic_settings import BaseSettings
+from pydantic import Field, ConfigDict
+# from aiograph import Telegraph
+from telegraph import Telegraph
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 # ---------- 1. Конфигурация ----------
 class Settings(BaseSettings):
-    telegram_token: str = Field(..., env="TELEGRAM_BOT_TOKEN")
-    deepseek_api_key: str = Field(..., env="DEEPSEEK_API_KEY")
-    local_tz: str = "Etc/GMT-3"              # GMT+3 (IANA)
+    telegram_token: str = Field(..., validation_alias="TELEGRAM_BOT_TOKEN")
+    deepseek_api_key: str = Field(..., validation_alias="DEEPSEEK_API_KEY")
+    local_tz: str = "Etc/GMT-3"
 
+    model_config = ConfigDict(
+        env_file=".env",       # Явно указываем путь к .env
+        env_file_encoding="utf-8",
+        extra="ignore"         # Игнорировать лишние переменные
+    )
+
+
+# Создаем экземпляр настроек
 settings = Settings()
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s")
 DB_PATH = "topics.db"
 LOCAL_TZ = ZoneInfo(settings.local_tz)
 
-bot = Bot(settings.telegram_token, parse_mode="HTML")
+# bot = Bot(settings.telegram_token, parse_mode="HTML")
+bot = Bot(settings.telegram_token, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher(storage=MemoryStorage())
 telegraph = Telegraph()                      # анонимный аккаунт
+telegraph.create_account(short_name="deepstudy")
+
 
 PROMPT_TEMPLATE = (
     'Привет! Помоги глубоко разобраться в теме: "{topic}".\n'
@@ -210,11 +229,11 @@ async def deepseek_request(topic: str) -> str:
             data = await r.json()
             return data["choices"][0]["message"]["content"]
 
+
 async def publish_to_telegraph(title: str, md_content: str) -> str:
-    page = await telegraph.create_page(title,
-                                       html_content=md_content,
-                                       author_name="DeepStudy Bot")
+    page = telegraph.create_page(title = title, author_name = "DeepStudy Bot",html_content = md_content)
     return page["url"]
+
 
 async def process_one_topic(user_id: int, immediate=False):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -272,9 +291,13 @@ async def scheduler():
 # ---------- 12. Точка входа ----------
 async def main():
     await init_db()
-    async with telegraph:
-        asyncio.create_task(scheduler())
-        await dp.start_polling(bot)
+
+    # Telegraph: создаём аккаунт один раз
+    telegraph.create_account(short_name="deepstudy")
+
+    # планировщик + поллинг
+    asyncio.create_task(scheduler())
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
